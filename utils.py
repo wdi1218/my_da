@@ -14,6 +14,10 @@ import re
 from PIL import Image
 from torchvision import models, transforms
 from cross_attention import CrossAttention  # 导入 CrossAttention 类
+import warnings
+
+warnings.filterwarnings("ignore", message="A parameter name that contains `gamma`")
+warnings.filterwarnings("ignore", message="A parameter name that contains `beta`")
 
 # 设置环境变量
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
@@ -52,44 +56,6 @@ class InputFeatures(object):
         self.text_feat = text_feat
         self.img_feat = img_feat
         self.label_id = label_id
-
-
-def XML2Array(neg_path, pos_path):
-    parser = etree.XMLParser(recover=True)
-    reviews = []
-    negCount = 0
-    posCount = 0
-    labels = []
-    regex = re.compile(r'[\n\r\t+]')
-
-    neg_tree = ET.parse(neg_path, parser=parser)
-    neg_root = neg_tree.getroot()
-
-    for rev in neg_root.iter('review_text'):
-        text = regex.sub(" ", rev.text)
-        reviews.append(text)
-        negCount += 1
-    labels.extend(np.zeros(negCount, dtype=int))
-
-    pos_tree = ET.parse(pos_path, parser=parser)
-    pos_root = pos_tree.getroot()
-
-    for rev in pos_root.iter('review_text'):
-        text = regex.sub(" ", rev.text)
-        reviews.append(text)
-        posCount += 1
-    labels.extend(np.ones(posCount, dtype=int))
-
-    reviews = np.array(reviews)
-    labels = np.array(labels)
-
-    return reviews, labels
-
-
-def CSV2Array(path):
-    data = pd.read_csv(path, encoding='latin')
-    reviews, labels = data.reviews.values.tolist(), data.labels.values.tolist()
-    return reviews, labels
 
 
 def TWI_CSV2Array(path1, path2, path3):
@@ -189,6 +155,45 @@ def init_model(args, net, restore=None):
     return net
 
 
+def init_multi_model(args, net_t, net_i, restore_t=None, restore_i=None):
+    # Restore text encoder weights
+    if restore_t is not None:
+        path_t = os.path.join(param.model_root, args.src, args.model, str(args.seed), restore_t)
+        if os.path.exists(path_t):
+            net_t.load_state_dict(torch.load(path_t))
+            print("Restore text model from: {}".format(os.path.abspath(path_t)))
+
+    # Restore image encoder weights
+    if restore_i is not None:
+        path_i = os.path.join(param.model_root, args.src, args.model, str(args.seed), restore_i)
+        if os.path.exists(path_i):
+            net_i.load_state_dict(torch.load(path_i))
+            print("Restore image model from: {}".format(os.path.abspath(path_i)))
+
+    # Check if CUDA is available
+    if torch.cuda.is_available():
+        cudnn.benchmark = True
+        net_t.cuda()
+        net_i.cuda()
+
+    return net_t, net_i
+
+
+def save_model_encoder(args, net_t, net_i, name_t, name_i):
+    """Save trained model."""
+    folder = os.path.join(param.model_root, args.src, args.model, str(args.seed))
+
+    # 保存文本编码器模型
+    text_model_path = os.path.join(folder, f"{name_t}_text_model.pth")
+    torch.save(net_t.state_dict(), text_model_path)
+    print("Saved text encoder model to: {}".format(text_model_path))
+
+    # 保存图像编码器模型
+    image_model_path = os.path.join(folder, f"{name_i}_image_model.pth")
+    torch.save(net_i.state_dict(), image_model_path)
+    print("Saved image encoder model to: {}".format(image_model_path))
+
+
 def save_model(args, net, name):
     """Save trained model."""
     folder = os.path.join(param.model_root, args.src, args.model, str(args.seed))
@@ -251,6 +256,7 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
     img_model = ViTModel.from_pretrained('models/vit-base-patch16-224').to(device)
 
     batch_size = 8
+    processed_count = 0  # 初始化计数器
 
     for i in range(0, len(reviews), batch_size):
         batch_texts = reviews[i:i + batch_size]
@@ -260,8 +266,8 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
         if isinstance(batch_texts, np.ndarray):
             batch_texts = batch_texts.tolist()
 
-        print(f"Type of batch_texts: {type(batch_texts)}")
-        print(f"Contents of batch_texts: {batch_texts}")
+        # print(f"Type of batch_texts: {type(batch_texts)}")
+        # print(f"Contents of batch_texts: {batch_texts}")
 
         processed_images = []
         for image_path in batch_images:
@@ -279,7 +285,6 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
         img_inputs = processor(images=processed_images, return_tensors="pt").to(device)
         image_outputs = img_model(**img_inputs)
 
-
         # 提取[CLS] token的特征表示
         text_cls_embeddings = text_outputs.last_hidden_state[:, 0, :]
         image_cls_embeddings = image_outputs.last_hidden_state[:, 0, :]
@@ -294,10 +299,12 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
                 )
             )
 
+        processed_count += 1  # 更新计数器
+        if processed_count % 200 == 0:  # 每处理 200 条数据输出提示
+            print(f"已处理 {processed_count} 条数据")
+
         # 清理缓存，释放显存
         torch.cuda.empty_cache()
-
-
 
     return features
 
@@ -330,13 +337,11 @@ def roberta_convert_examples_to_features(reviews, labels, max_seq_length, tokeni
 
 
 def mulit_get_data_loader(features, batch_size):
-    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
-    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+    all_input_text = torch.tensor([f.text_feat for f in features], dtype=torch.float)
+    all_input_img = torch.tensor([f.img_feat for f in features], dtype=torch.float)
     all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
-    # 使用 clone().detach() 直接复制张量
-    all_img_datas = torch.stack([f.img_datas.clone().detach().float() for f in features])
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_label_ids, all_img_datas)
+    dataset = TensorDataset(all_input_text, all_input_img, all_label_ids)
     sampler = RandomSampler(dataset)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
     return dataloader

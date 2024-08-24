@@ -6,11 +6,18 @@ import torch.nn.functional as F
 import torch.nn as nn
 import param
 import torch.optim as optim
-from utils import save_model
+from utils import save_model, save_model_encoder
 from modules.attention import CrsAtten
 from modules.my_resnet import MyResnet_wofc
 from modules.ImgTextMatching import ImgTextMatching
-from torch.nn.modules.transformer import MultiheadAttention
+from cross_attention import CrossAttention  # 导入 CrossAttention 类
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("CUDA is available. Running on GPU.")
+else:
+    device = torch.device("cpu")
+    print("CUDA is not available. Running on CPU.")
 
 
 def pretrain(args, encoder, classifier, data_loader):
@@ -59,67 +66,54 @@ def pretrain(args, encoder, classifier, data_loader):
     return encoder, classifier
 
 
-def multi_pretrain(args, encoder, classifier, data_loader):
+def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
     """Train classifier for source domain."""
 
     # setup criterion and optimizer
-    optimizer = optim.Adam(list(encoder.parameters()) + list(classifier.parameters()),
+    optimizer = optim.Adam(list(encoder_t.parameters()) + list(encoder_i.parameters()) + list(classifier.parameters()),
                            lr=param.c_learning_rate)
     CELoss = nn.CrossEntropyLoss()
 
     # set train state for Dropout and BN layers
-    encoder.train()
+    encoder_t.train()
+    encoder_i.train()
     classifier.train()
 
     for epoch in range(args.pre_epochs):
-        for step, (reviews, mask, labels, img_datas) in enumerate(data_loader):
-            reviews = make_cuda(reviews)
-            mask = make_cuda(mask)
-            labels = make_cuda(labels)
-            img_datas = make_cuda(img_datas)
+        for step, (reviews, img_datas, labels) in enumerate(data_loader):
 
+            text_feats = make_cuda(reviews)
+            img_feats = make_cuda(img_datas)
+            labels = make_cuda(labels)
             # zero gradients for optimizer
             optimizer.zero_grad()
 
-            # compute loss for discriminator
-            text_feats = encoder(reviews, mask)
+            # 初始化交叉注意力层
+            cross_attention = CrossAttention(hidden_size=768).to(device)
 
-            # 确保 MyResnet_wofc 已被正确实例化
-            my_resnet_instance = MyResnet_wofc()
+            # 将文本表示作为 key 和 value，图像表示作为 query 进行交叉注意力融合
+            fused_representation_i2t = cross_attention(query=img_feats.unsqueeze(1).to(device),
+                                                       key=text_feats.unsqueeze(1).to(device),
+                                                       value=text_feats.unsqueeze(1).to(device)).to(device)
 
-            # 将模型移动到设备 (CPU or GPU)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            my_resnet_instance.resnet.to(device)
+            fused_representation_t2i = cross_attention(query=text_feats.unsqueeze(1).to(device),
+                                                       key=img_feats.unsqueeze(1).to(device),
+                                                       value=img_feats.unsqueeze(1).to(device)).to(device)
 
-            img_feats = my_resnet_instance.resnet_forward(img_datas)
+            # 融合两个交叉注意力的结果
+            # 这里采用相加，拼接或线性层(线性层融合)
+            # 拼接两个表示，得到形状为 [batch_size, 1536]
+            fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1).to(device)
 
-            model = ImgTextMatching()
-            model.to(device)
+            # 定义一个线性层，将 1536 维的输入映射到 128 维的输出
+            fusion_layer = torch.nn.Linear(1536, 128).to(device)
 
-            img_feats = model.img_linear(img_feats.view(img_feats.size(0), -1, img_feats.size(3)))
-            img_feats = model.img_drop(img_feats)
+            # 通过线性层获得融合后的特征
+            fused_representation = fusion_layer(fused_input)
+            fused_representation = fused_representation.squeeze(1)
 
-            text_feats = model.txt_linear(text_feats)
-            text_feats = model.txt_drop(text_feats)
+            preds = classifier(fused_representation)
 
-            # 打印调试信息
-            # print(f"Original img_feats shape: {img_feats.shape}")  # (16, 49, 128)
-            # print(f"Original text_feats shape: {text_feats.shape}")  # (16, 128)
-
-            # 对第二个维度进行平均池化
-            pooled_img_feats = F.adaptive_avg_pool1d(img_feats.permute(0, 2, 1), 1).squeeze(-1)
-
-            # 打印调整后的形状
-            # print(f"Pooled img_feats shape: {pooled_img_feats.shape}")  # (16, 128)
-
-            i2t_out = model.img_to_txt_multi_att(query=text_feats, key=pooled_img_feats, value=pooled_img_feats)
-            t2i_out = model.txt_to_img_multi_att(query=pooled_img_feats, key=text_feats, value=text_feats)
-            i2t_out = i2t_out[0]
-            t2i_out = t2i_out[0]
-
-            feat = i2t_out + t2i_out
-
-            preds = classifier(feat)
             cls_loss = CELoss(preds, labels)
 
             # optimize source classifier
@@ -136,10 +130,10 @@ def multi_pretrain(args, encoder, classifier, data_loader):
                          cls_loss.item()))
 
     # save final model
-    save_model(args, encoder, param.src_encoder_path)
+    save_model_encoder(args, encoder_t, encoder_i, param.src_encoder_path_t, param.src_encoder_path_i)
     save_model(args, classifier, param.src_classifier_path)
 
-    return encoder, classifier
+    return encoder_t, encoder_i, classifier
 
 
 def adapt(args, src_encoder, tgt_encoder, discriminator,
@@ -243,7 +237,7 @@ def adapt(args, src_encoder, tgt_encoder, discriminator,
 
 
 def multi_adapt(args, src_encoder, tgt_encoder, discriminator,
-          src_classifier, src_data_loader, tgt_data_train_loader, tgt_data_all_loader):
+                src_classifier, src_data_loader, tgt_data_train_loader, tgt_data_all_loader):
     """Train encoder for target domain."""
 
     # set train state for Dropout and BN layers
@@ -263,7 +257,7 @@ def multi_adapt(args, src_encoder, tgt_encoder, discriminator,
     for epoch in range(args.num_epochs):
         # zip source and target data pair
         data_zip = enumerate(zip(src_data_loader, tgt_data_train_loader))
-        for step, ((reviews_src, src_mask, _ , src_img), (reviews_tgt, tgt_mask, _ , tgt_img)) in data_zip:
+        for step, ((reviews_src, src_mask, _, src_img), (reviews_tgt, tgt_mask, _, tgt_img)) in data_zip:
             # 检查 reviews_src 和 reviews_tgt 的第一个维度是否一致
             if reviews_src.size(0) != reviews_tgt.size(0):
                 continue  # 如果不一致，则跳过当前批次
@@ -309,14 +303,14 @@ def multi_adapt(args, src_encoder, tgt_encoder, discriminator,
                 i2t_out = i2t_out[0]
                 t2i_out = t2i_out[0]
 
-
-                feat_src =   i2t_out + t2i_out
+                feat_src = i2t_out + t2i_out
                 # *******************************#
             # ********** 源域、目标域 ************#
             feat_text_src_tgt = tgt_encoder(reviews_src, src_mask)
 
             feat_img_src_tgt = my_resnet_instance.resnet_forward(src_img)
-            feat_img_src_tgt = model.img_linear(feat_img_src_tgt.view(feat_img_src_tgt.size(0), -1, feat_img_src_tgt.size(3)))
+            feat_img_src_tgt = model.img_linear(
+                feat_img_src_tgt.view(feat_img_src_tgt.size(0), -1, feat_img_src_tgt.size(3)))
             feat_img_src_tgt = model.img_drop(feat_img_src_tgt)
 
             feat_text_src_tgt = model.txt_linear(feat_text_src_tgt)
@@ -416,6 +410,7 @@ def multi_adapt(args, src_encoder, tgt_encoder, discriminator,
 
     return tgt_encoder
 
+
 def evaluate(encoder, classifier, data_loader):
     """Evaluation for target encoder by source classifier on target dataset."""
     # set eval state for Dropout and BN layers
@@ -450,10 +445,11 @@ def evaluate(encoder, classifier, data_loader):
     return acc
 
 
-def multi_evaluate(encoder, classifier, data_loader):
+def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
     """Evaluation for target encoder by source classifier on target dataset."""
     # set eval state for Dropout and BN layers
-    encoder.eval()
+    encoder_t.eval()
+    encoder_i.eval()
     classifier.eval()
 
     # init loss and accuracy
@@ -464,42 +460,40 @@ def multi_evaluate(encoder, classifier, data_loader):
     criterion = nn.CrossEntropyLoss()
 
     # evaluate network
-    for (reviews, mask, labels, img_datas) in data_loader:
-        reviews = make_cuda(reviews)
-        mask = make_cuda(mask)
+    for (reviews, img_datas, labels) in data_loader:
+
         labels = make_cuda(labels)
-        img_datas = make_cuda(img_datas)
 
         with torch.no_grad():
-            text_feats = encoder(reviews, mask)
+            text_feats = make_cuda(reviews)
+            img_feats = make_cuda(img_datas)
 
-            # 确保 MyResnet_wofc 已被正确实例化
-            my_resnet_instance = MyResnet_wofc()
-            # 将模型移动到设备 (CPU or GPU)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            my_resnet_instance.resnet.to(device)
-            img_feats = my_resnet_instance.resnet_forward(img_datas)
+            # 初始化交叉注意力层
+            cross_attention = CrossAttention(hidden_size=768).to(device)
 
-            model = ImgTextMatching()
-            model.to(device)
+            # 将文本表示作为 key 和 value，图像表示作为 query 进行交叉注意力融合
+            fused_representation_i2t = cross_attention(query=img_feats.unsqueeze(1).to(device),
+                                                       key=text_feats.unsqueeze(1).to(device),
+                                                       value=text_feats.unsqueeze(1).to(device)).to(device)
 
-            img_feats = model.img_linear(img_feats.view(img_feats.size(0), -1, img_feats.size(3)))
-            img_feats = model.img_drop(img_feats)
+            fused_representation_t2i = cross_attention(query=text_feats.unsqueeze(1).to(device),
+                                                       key=img_feats.unsqueeze(1).to(device),
+                                                       value=img_feats.unsqueeze(1).to(device)).to(device)
 
-            text_feats = model.txt_linear(text_feats)
-            text_feats = model.txt_drop(text_feats)
+            # 融合两个交叉注意力的结果
+            # 这里采用相加，拼接或线性层(线性层融合)
+            # 拼接两个表示，得到形状为 [batch_size, 1536]
+            fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1).to(device)
 
-            # 对第二个维度进行平均池化
-            pooled_img_feats = F.adaptive_avg_pool1d(img_feats.permute(0, 2, 1), 1).squeeze(-1)
+            # 定义一个线性层，将 1536 维的输入映射到 128 维的输出
+            fusion_layer = torch.nn.Linear(1536, 128).to(device)
 
-            i2t_out = model.img_to_txt_multi_att(query=text_feats, key=pooled_img_feats, value=pooled_img_feats)
-            t2i_out = model.txt_to_img_multi_att(query=pooled_img_feats, key=text_feats, value=text_feats)
-            i2t_out = i2t_out[0]
-            t2i_out = t2i_out[0]
+            # 通过线性层获得融合后的特征
+            fused_representation = fusion_layer(fused_input)
+            fused_representation = fused_representation.squeeze(1)
 
-            feat = i2t_out + t2i_out
+            preds = classifier(fused_representation)
 
-            preds = classifier(feat)
         loss += criterion(preds, labels).item()
         pred_cls = preds.data.max(1)[1]
         acc += pred_cls.eq(labels.data).cpu().sum().item()

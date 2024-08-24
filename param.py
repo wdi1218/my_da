@@ -9,7 +9,8 @@ EOS = 3
 data_root = "data"
 
 # params for source dataset
-src_encoder_path = "source-encoder.pt"
+src_encoder_path_t = "source-encoder_t.pt"
+src_encoder_path_i = "source-encoder_i.pt"
 src_classifier_path = "source-classifier.pt"
 
 # params for target dataset

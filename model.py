@@ -1,7 +1,8 @@
 import torch
 import param
 import torch.nn as nn
-from transformers import BertModel, DistilBertModel, RobertaModel, AutoImageProcessor, ResNetForImageClassification
+from transformers import BertTokenizer, BertModel, DistilBertModel, RobertaModel, AutoImageProcessor, \
+    ResNetForImageClassification, ViTImageProcessor, ViTModel
 from torchvision import datasets, transforms
 from torchvision import models
 
@@ -9,12 +10,29 @@ from torchvision import models
 class BertEncoder(nn.Module):
     def __init__(self):
         super(BertEncoder, self).__init__()
+        self.tokenizer = BertTokenizer.from_pretrained('./models/bert-base-uncased')
         self.encoder = BertModel.from_pretrained('./models/bert-base-uncased')
 
-    def forward(self, x, mask=None):
-        outputs = self.encoder(x, attention_mask=mask)
-        feat = outputs[1]
-        return feat
+    def forward(self, texts):
+        text_inputs = self.tokenizer(texts, return_tensors='pt')
+        text_outputs = self.encoder(**text_inputs)
+        cls_embedding_t = text_outputs.last_hidden_state[:, 0, :]
+        return cls_embedding_t
+
+
+class ViTEncoder(nn.Module):
+    def __init__(self):
+        super(ViTEncoder, self).__init__()
+        self.processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
+        self.model = ViTModel.from_pretrained('models/vit-base-patch16-224')
+
+    def forward(self, images):
+        # images 是一个包含 PIL 图像的列表
+        img_inputs = self.processor(images=images, return_tensors="pt")
+        img_outputs = self.model(**img_inputs)
+        # 提取 [CLS] token 的特征表示
+        cls_embedding_i = img_outputs.last_hidden_state[:, 0, :]
+        return cls_embedding_i
 
 
 class DistilBertEncoder(nn.Module):
@@ -116,4 +134,3 @@ class Discriminator(nn.Module):
         """Forward the discriminator."""
         out = self.layer(x)
         return out
-

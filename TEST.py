@@ -26,8 +26,8 @@ if image.mode != "RGB":
     image = image.convert("RGB")
 
 # 加载处理器和预训练模型
-processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224-in21k')
-img_model = ViTModel.from_pretrained('models/vit-base-patch16-224-in21k').to(device)  # 注意这里改为 ViTModel 而不是 ViTForImageClassification
+processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
+img_model = ViTModel.from_pretrained('models/vit-base-patch16-224').to(device)  # 注意这里改为 ViTModel 而不是 ViTForImageClassification
 
 # 加载 RoBERTa 分词器和预训练模型
 tokenizer = RobertaTokenizer.from_pretrained('models/roberta-base')
@@ -40,12 +40,12 @@ text_input = tokenizer(text, return_tensors='pt').to(device)
 # 前向传播，获取模型输出
 img_outputs = img_model(**img_inputs)
 
-text_output = text_model(**text_input)
+text_outputs = text_model(**text_input)
 
 
 # 提取[CLS] token的特征表示作为图像的全局特征
 cls_embedding_i = img_outputs.last_hidden_state[:, 0, :].to(device)   # [batch_size, hidden_size]
-cls_embedding_t = text_output.last_hidden_state[:, 0, :].to(device)   # [batch_size, hidden_size]
+cls_embedding_t = text_outputs.last_hidden_state[:, 0, :].to(device)   # [batch_size, hidden_size]
 
 print("Image CLS embedding shape:", cls_embedding_i.shape)
 # print("CLS embedding:", cls_embedding_i)
@@ -72,7 +72,7 @@ fused_representation_t2i = cross_attention(query=cls_embedding_t.unsqueeze(1).to
 fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1).to(device)
 
 # 定义一个线性层，将 1536 维的输入映射到 768 维的输出
-fusion_layer = torch.nn.Linear(1536, 768).to(device)
+fusion_layer = torch.nn.Linear(1536, 128).to(device)
 
 # 通过线性层获得融合后的特征
 fused_representation = fusion_layer(fused_input)

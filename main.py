@@ -3,9 +3,9 @@
 import param
 from train import pretrain, adapt, evaluate, multi_pretrain, multi_evaluate, multi_adapt
 from model import (BertEncoder, DistilBertEncoder, DistilRobertaEncoder,
-                   BertClassifier, Discriminator, RobertaEncoder, RobertaClassifier)
-from utils import XML2Array, CSV2Array, convert_examples_to_features, \
-    roberta_convert_examples_to_features, get_data_loader, init_model, TWI_CSV2Array, \
+                   BertClassifier, Discriminator, RobertaEncoder, RobertaClassifier, ViTEncoder)
+from utils import convert_examples_to_features, \
+    roberta_convert_examples_to_features, get_data_loader, init_model, init_multi_model, TWI_CSV2Array, \
     multi_convert_examples_to_features, mulit_get_data_loader
 from sklearn.model_selection import train_test_split
 from transformers import BertTokenizer, RobertaTokenizer
@@ -220,41 +220,79 @@ def main():
         tgt_data_all_loader = get_data_loader(tgt_features, args.batch_size)
 
     # load models
-    if args.model == 'bert-base-uncased':
-        src_encoder = BertEncoder()
-        tgt_encoder = BertEncoder()
-        src_classifier = BertClassifier()
-    elif args.model == 'distilbert':
-        src_encoder = DistilBertEncoder()
-        tgt_encoder = DistilBertEncoder()
-        src_classifier = BertClassifier()
-    elif args.model == 'roberta':
-        src_encoder = RobertaEncoder()
-        tgt_encoder = RobertaEncoder()
-        src_classifier = RobertaClassifier()
+    if args.multimodal:
+        if args.model == 'bert-base-uncased':
+            src_encoder_t = BertEncoder()
+            tgt_encoder_t = BertEncoder()
+            src_encoder_i = ViTEncoder()
+            tgt_encoder_i = ViTEncoder()
+            src_classifier = BertClassifier()
+        elif args.model == 'distilbert':
+            src_encoder = DistilBertEncoder()
+            tgt_encoder = DistilBertEncoder()
+            src_classifier = BertClassifier()
+        elif args.model == 'roberta':
+            src_encoder = RobertaEncoder()
+            tgt_encoder = RobertaEncoder()
+            src_classifier = RobertaClassifier()
+        else:
+            src_encoder = DistilRobertaEncoder()
+            tgt_encoder = DistilRobertaEncoder()
+            src_classifier = RobertaClassifier()
+        discriminator = Discriminator()
     else:
-        src_encoder = DistilRobertaEncoder()
-        tgt_encoder = DistilRobertaEncoder()
-        src_classifier = RobertaClassifier()
-    discriminator = Discriminator()
+        # load models
+        if args.model == 'bert':
+            src_encoder = BertEncoder()
+            tgt_encoder = BertEncoder()
+            src_classifier = BertClassifier()
+        elif args.model == 'distilbert':
+            src_encoder = DistilBertEncoder()
+            tgt_encoder = DistilBertEncoder()
+            src_classifier = BertClassifier()
+        elif args.model == 'roberta':
+            src_encoder = RobertaEncoder()
+            tgt_encoder = RobertaEncoder()
+            src_classifier = RobertaClassifier()
+        else:
+            src_encoder = DistilRobertaEncoder()
+            tgt_encoder = DistilRobertaEncoder()
+            src_classifier = RobertaClassifier()
+        discriminator = Discriminator()
 
-    if args.load:
-        src_encoder = init_model(args, src_encoder, restore=param.src_encoder_path)
-        src_classifier = init_model(args, src_classifier, restore=param.src_classifier_path)
-        tgt_encoder = init_model(args, tgt_encoder, restore=param.tgt_encoder_path)
-        discriminator = init_model(args, discriminator, restore=param.d_model_path)
+    if args.multimodal:
+        if args.load:
+            src_encoder_t, src_encoder_i = init_multi_model(args, src_encoder_t, src_encoder_i,
+                                                            restore_t=param.src_encoder_path_t,
+                                                            restore_i=param.src_encoder_path_i)
+            src_classifier = init_model(args, src_classifier, restore=param.src_classifier_path)
+            tgt_encoder_t, tgt_encoder_i = init_multi_model(args, tgt_encoder_t, tgt_encoder_i,
+                                                            restore_t=param.src_encoder_path_t,
+                                                            restore_i=param.src_encoder_path_i)
+            discriminator = init_model(args, discriminator, restore=param.d_model_path)
+        else:
+            src_encoder_t, src_encoder_i = init_multi_model(args, src_encoder_t, src_encoder_i)
+            src_classifier = init_model(args, src_classifier)
+            tgt_encoder_t, tgt_encoder_i = init_multi_model(args, src_encoder_t, tgt_encoder_i)
+            discriminator = init_model(args, discriminator)
     else:
-        src_encoder = init_model(args, src_encoder)
-        src_classifier = init_model(args, src_classifier)
-        tgt_encoder = init_model(args, tgt_encoder)
-        discriminator = init_model(args, discriminator)
+        if args.load:
+            src_encoder = init_model(args, src_encoder, restore=param.src_encoder_path)
+            src_classifier = init_model(args, src_classifier, restore=param.src_classifier_path)
+            tgt_encoder = init_model(args, tgt_encoder, restore=param.tgt_encoder_path)
+            discriminator = init_model(args, discriminator, restore=param.d_model_path)
+        else:
+            src_encoder = init_model(args, src_encoder)
+            src_classifier = init_model(args, src_classifier)
+            tgt_encoder = init_model(args, tgt_encoder)
+            discriminator = init_model(args, discriminator)
 
     # train source model
     print("=== Training classifier for source domain ===")
     if args.pretrain:
         if args.multimodal:
-            src_encoder, src_classifier = multi_pretrain(
-                args, src_encoder, src_classifier, src_data_loader)
+            src_encoder_t, src_encoder_i, src_classifier = multi_pretrain(
+                args, src_encoder_t, src_encoder_i, src_classifier, src_data_loader)
         else:
             src_encoder, src_classifier = pretrain(
                 args, src_encoder, src_classifier, src_data_loader)
@@ -262,15 +300,17 @@ def main():
     # eval source model
     print("=== Evaluating classifier for source domain ===")
     if args.multimodal:
-        multi_evaluate(src_encoder, src_classifier, src_data_loader)
-        multi_evaluate(src_encoder, src_classifier, src_data_eval_loader)
-        multi_evaluate(src_encoder, src_classifier, tgt_data_all_loader)
+        multi_evaluate(src_encoder_t, src_encoder_i, src_classifier, src_data_loader)
+        multi_evaluate(src_encoder_t, src_encoder_i, src_classifier, src_data_eval_loader)
+        multi_evaluate(src_encoder_t, src_encoder_i, src_classifier, tgt_data_all_loader)
     else:
         evaluate(src_encoder, src_classifier, src_data_loader)
         evaluate(src_encoder, src_classifier, src_data_eval_loader)
         evaluate(src_encoder, src_classifier, tgt_data_all_loader)
 
-    for params in src_encoder.parameters():
+    for params in src_encoder_t.parameters():
+        params.requires_grad = False
+    for params in src_encoder_i.parameters():
         params.requires_grad = False
 
     for params in src_classifier.parameters():
