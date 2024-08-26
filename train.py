@@ -8,6 +8,7 @@ import param
 import torch.optim as optim
 from utils import save_model, save_model_encoder
 from modules.attention import CrsAtten
+from transformers import ViTImageProcessor, ViTModel, RobertaTokenizer, RobertaModel, BertTokenizer, BertModel
 from modules.my_resnet import MyResnet_wofc
 from modules.ImgTextMatching import ImgTextMatching
 from cross_attention import CrossAttention  # 导入 CrossAttention 类
@@ -68,7 +69,6 @@ def pretrain(args, encoder, classifier, data_loader):
 
 def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
     """Train classifier for source domain."""
-
     # setup criterion and optimizer
     optimizer = optim.Adam(list(encoder_t.parameters()) + list(encoder_i.parameters()) + list(classifier.parameters()),
                            lr=param.c_learning_rate)
@@ -80,25 +80,32 @@ def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
     classifier.train()
 
     for epoch in range(args.pre_epochs):
-        for step, (reviews, img_datas, labels) in enumerate(data_loader):
+        for step, (reviews, masks, img_datas, labels) in enumerate(data_loader):
 
             text_feats = make_cuda(reviews)
+            masks = make_cuda(masks)
             img_feats = make_cuda(img_datas)
+
+            img_feats = {'pixel_values': img_feats}
             labels = make_cuda(labels)
             # zero gradients for optimizer
             optimizer.zero_grad()
+
+            text_outputs = encoder_t(text_feats, masks)
+            image_outputs = encoder_i(img_feats)
+
 
             # 初始化交叉注意力层
             cross_attention = CrossAttention(hidden_size=768).to(device)
 
             # 将文本表示作为 key 和 value，图像表示作为 query 进行交叉注意力融合
-            fused_representation_i2t = cross_attention(query=img_feats.unsqueeze(1).to(device),
-                                                       key=text_feats.unsqueeze(1).to(device),
-                                                       value=text_feats.unsqueeze(1).to(device)).to(device)
+            fused_representation_i2t = cross_attention(query=image_outputs.unsqueeze(1).to(device),
+                                                       key=text_outputs.unsqueeze(1).to(device),
+                                                       value=text_outputs.unsqueeze(1).to(device)).to(device)
 
-            fused_representation_t2i = cross_attention(query=text_feats.unsqueeze(1).to(device),
-                                                       key=img_feats.unsqueeze(1).to(device),
-                                                       value=img_feats.unsqueeze(1).to(device)).to(device)
+            fused_representation_t2i = cross_attention(query=text_outputs.unsqueeze(1).to(device),
+                                                       key=image_outputs.unsqueeze(1).to(device),
+                                                       value=image_outputs.unsqueeze(1).to(device)).to(device)
 
             # 融合两个交叉注意力的结果
             # 这里采用相加，拼接或线性层(线性层融合)
@@ -461,7 +468,6 @@ def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
 
     # evaluate network
     for (reviews, img_datas, labels) in data_loader:
-
         labels = make_cuda(labels)
 
         with torch.no_grad():

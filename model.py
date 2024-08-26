@@ -10,12 +10,10 @@ from torchvision import models
 class BertEncoder(nn.Module):
     def __init__(self):
         super(BertEncoder, self).__init__()
-        self.tokenizer = BertTokenizer.from_pretrained('./models/bert-base-uncased')
         self.encoder = BertModel.from_pretrained('./models/bert-base-uncased')
 
-    def forward(self, texts):
-        text_inputs = self.tokenizer(texts, return_tensors='pt')
-        text_outputs = self.encoder(**text_inputs)
+    def forward(self, texts_inputs, attention_mask):
+        text_outputs = self.encoder(input_ids=texts_inputs, attention_mask=attention_mask)
         cls_embedding_t = text_outputs.last_hidden_state[:, 0, :]
         return cls_embedding_t
 
@@ -23,12 +21,9 @@ class BertEncoder(nn.Module):
 class ViTEncoder(nn.Module):
     def __init__(self):
         super(ViTEncoder, self).__init__()
-        self.processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
         self.model = ViTModel.from_pretrained('models/vit-base-patch16-224')
 
-    def forward(self, images):
-        # images 是一个包含 PIL 图像的列表
-        img_inputs = self.processor(images=images, return_tensors="pt")
+    def forward(self, img_inputs):
         img_outputs = self.model(**img_inputs)
         # 提取 [CLS] token 的特征表示
         cls_embedding_i = img_outputs.last_hidden_state[:, 0, :]

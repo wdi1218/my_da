@@ -4,9 +4,8 @@ import param
 from train import pretrain, adapt, evaluate, multi_pretrain, multi_evaluate, multi_adapt
 from model import (BertEncoder, DistilBertEncoder, DistilRobertaEncoder,
                    BertClassifier, Discriminator, RobertaEncoder, RobertaClassifier, ViTEncoder)
-from utils import convert_examples_to_features, \
-    roberta_convert_examples_to_features, get_data_loader, init_model, init_multi_model, TWI_CSV2Array, \
-    multi_convert_examples_to_features, mulit_get_data_loader
+from utils import convert_examples_to_features, get_data_loader, init_model, init_multi_model, TWI_CSV2Array, \
+    multi_convert_examples_to_features, multi_get_data_loader,roberta_convert_examples_to_features
 from sklearn.model_selection import train_test_split
 from transformers import BertTokenizer, RobertaTokenizer
 import torch
@@ -209,10 +208,10 @@ def main():
 
     # load dataset
     if args.multimodal:
-        src_data_loader = mulit_get_data_loader(src_features, args.batch_size)
-        src_data_eval_loader = mulit_get_data_loader(src_test_features, args.batch_size)
-        tgt_data_train_loader = mulit_get_data_loader(tgt_train_features, args.batch_size)
-        tgt_data_all_loader = mulit_get_data_loader(tgt_features, args.batch_size)
+        src_data_loader = multi_get_data_loader(src_features, args.batch_size)
+        src_data_eval_loader = multi_get_data_loader(src_test_features, args.batch_size)
+        tgt_data_train_loader = multi_get_data_loader(tgt_train_features, args.batch_size)
+        tgt_data_all_loader = multi_get_data_loader(tgt_features, args.batch_size)
     else:
         src_data_loader = get_data_loader(src_features, args.batch_size)
         src_data_eval_loader = get_data_loader(src_test_features, args.batch_size)

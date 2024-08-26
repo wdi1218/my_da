@@ -52,9 +52,10 @@ def convert_label(label):
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, text_feat, img_feat, label_id):
+    def __init__(self, text_feat, img_feat, mask_id, label_id):
         self.text_feat = text_feat
         self.img_feat = img_feat
+        self.mask_id = mask_id
         self.label_id = label_id
 
 
@@ -226,7 +227,7 @@ def convert_examples_to_features(reviews, labels, max_seq_length, tokenizer,
 
         features.append(
             InputFeatures(input_ids=input_ids,
-                          input_mask=input_mask,
+                          mask_id=input_mask,
                           label_id=label,
                           img_datas=None))
 
@@ -251,62 +252,63 @@ def image_data(root_path, image_path, processor, img_model):
 def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
     features = []
     tokenizer = BertTokenizer.from_pretrained('models/bert-base-uncased')
-    text_model = BertModel.from_pretrained("models/bert-base-uncased").to(device)
     processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
-    img_model = ViTModel.from_pretrained('models/vit-base-patch16-224').to(device)
 
     batch_size = 8
+    max_text_length = 128  # 确保所有文本的最大长度一致
+    img_size = (224, 224)  # ViT 模型输入的图像尺寸
+
     processed_count = 0  # 初始化计数器
 
+    if isinstance(reviews, np.ndarray):
+        reviews = reviews.tolist()
+
+    # 统一处理所有样本的文本
+    all_text_inputs = tokenizer(reviews, padding=True, truncation=True, max_length=max_text_length,
+                                return_tensors='pt').to(device)
+    all_img_inputs = processor(
+        images=[Image.open(os.path.join(root_path, img_path)).convert("RGB").resize(img_size) for img_path in
+                image_paths], return_tensors="pt").to(device)
+
     for i in range(0, len(reviews), batch_size):
-        batch_texts = reviews[i:i + batch_size]
-        batch_images = image_paths[i:i + batch_size]
+        processed_count += 1  # 更新计数器
+        if processed_count % 100 == 0:  # 每处理 100 批数据输出提示
+            print(f"已处理 {processed_count * batch_size} 条数据")
+
+        batch_texts = all_text_inputs['input_ids'][i:i + batch_size]
+        batch_masks = all_text_inputs['attention_mask'][i:i + batch_size]
+        batch_images = all_img_inputs['pixel_values'][i:i + batch_size]
         batch_labels = labels[i:i + batch_size]
 
-        if isinstance(batch_texts, np.ndarray):
-            batch_texts = batch_texts.tolist()
-
-        # print(f"Type of batch_texts: {type(batch_texts)}")
-        # print(f"Contents of batch_texts: {batch_texts}")
-
-        processed_images = []
-        for image_path in batch_images:
-            full_path = os.path.join(root_path, image_path)
-            image = Image.open(full_path)
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            processed_images.append(image)
-
-        # 处理文本和图像输入
-        text_inputs = tokenizer(batch_texts, padding=True, truncation=True, return_tensors='pt').to(device)
-        text_outputs = text_model(**text_inputs)
-
-        # 处理后的 processed_images 列表可以用于后续的图像处理
-        img_inputs = processor(images=processed_images, return_tensors="pt").to(device)
-        image_outputs = img_model(**img_inputs)
-
-        # 提取[CLS] token的特征表示
-        text_cls_embeddings = text_outputs.last_hidden_state[:, 0, :]
-        image_cls_embeddings = image_outputs.last_hidden_state[:, 0, :]
-
         # 将每个样本的特征和标签保存到特征数组中
-        for text_cls, image_cls, label in zip(text_cls_embeddings, image_cls_embeddings, batch_labels):
+        for input_id, image_input, mask, label in zip(batch_texts, batch_images, batch_masks, batch_labels):
             features.append(
                 InputFeatures(
-                    text_feat=text_cls.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
-                    img_feat=image_cls.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
+                    text_feat=input_id.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
+                    img_feat=image_input.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
+                    mask_id=mask.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
                     label_id=label
                 )
             )
 
-        processed_count += 1  # 更新计数器
-        if processed_count % 200 == 0:  # 每处理 200 条数据输出提示
-            print(f"已处理 {processed_count} 条数据")
-
-        # 清理缓存，释放显存
-        torch.cuda.empty_cache()
-
     return features
+
+
+def MMD(source, target):
+    mmd_loss = torch.exp(-1 / (source.mean(dim=0) - target.mean(dim=0)).norm())
+    return mmd_loss
+
+
+def multi_get_data_loader(features, batch_size):
+    all_input_text = torch.tensor([f.text_feat for f in features], dtype=torch.long)
+    all_input_mask = torch.tensor([f.mask_id for f in features], dtype=torch.long)
+    all_input_img = torch.tensor([f.img_feat for f in features], dtype=torch.float)
+    all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+
+    dataset = TensorDataset(all_input_text, all_input_mask, all_input_img, all_label_ids)
+    sampler = RandomSampler(dataset)
+    dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
+    return dataloader
 
 
 def roberta_convert_examples_to_features(reviews, labels, max_seq_length, tokenizer,
@@ -336,17 +338,6 @@ def roberta_convert_examples_to_features(reviews, labels, max_seq_length, tokeni
     return features
 
 
-def mulit_get_data_loader(features, batch_size):
-    all_input_text = torch.tensor([f.text_feat for f in features], dtype=torch.float)
-    all_input_img = torch.tensor([f.img_feat for f in features], dtype=torch.float)
-    all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
-
-    dataset = TensorDataset(all_input_text, all_input_img, all_label_ids)
-    sampler = RandomSampler(dataset)
-    dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
-    return dataloader
-
-
 def get_data_loader(features, batch_size):
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
@@ -355,10 +346,3 @@ def get_data_loader(features, batch_size):
     sampler = RandomSampler(dataset)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
     return dataloader
-
-
-def MMD(source, target):
-    mmd_loss = torch.exp(-1 / (source.mean(dim=0) - target.mean(dim=0)).norm())
-    return mmd_loss
-
-# 多模态数据

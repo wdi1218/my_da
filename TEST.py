@@ -36,7 +36,7 @@ text_model = RobertaModel.from_pretrained('models/roberta-base').to(device)
 
 img_inputs = processor(images=image, return_tensors="pt").to(device)
 text_input = tokenizer(text, return_tensors='pt').to(device)
-
+print(text_input)
 # 前向传播，获取模型输出
 img_outputs = img_model(**img_inputs)
 
