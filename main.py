@@ -5,7 +5,7 @@ from train import pretrain, adapt, evaluate, multi_pretrain, multi_evaluate, mul
 from model import (BertEncoder, DistilBertEncoder, DistilRobertaEncoder,
                    BertClassifier, Discriminator, RobertaEncoder, RobertaClassifier, ViTEncoder)
 from utils import convert_examples_to_features, get_data_loader, init_model, init_multi_model, TWI_CSV2Array, \
-    multi_convert_examples_to_features, multi_get_data_loader,roberta_convert_examples_to_features
+    multi_convert_examples_to_features, multi_get_data_loader, roberta_convert_examples_to_features
 from sklearn.model_selection import train_test_split
 from transformers import BertTokenizer, RobertaTokenizer
 import torch
@@ -43,10 +43,10 @@ def parse_arguments():
                         help='Force to adapt target encoder')
     # TRUE 43:0.9075
     # FALSE 43:0.5727
-    parser.add_argument('--seed', type=int, default=43,
+    parser.add_argument('--seed', type=int, default=44,
                         help="Specify random state")
 
-    parser.add_argument('--train_seed', type=int, default=43,
+    parser.add_argument('--train_seed', type=int, default=44,
                         help="Specify random state")
 
     parser.add_argument('--load', default=False, action='store_true',
@@ -319,9 +319,12 @@ def main():
     print("=== Training encoder for target domain ===")
     if args.adapt:
         if args.multimodal:
-            tgt_encoder.load_state_dict(src_encoder.state_dict())
-            tgt_encoder = multi_adapt(args, src_encoder, tgt_encoder, discriminator,
-                                      src_classifier, src_data_loader, tgt_data_train_loader, tgt_data_all_loader)
+            tgt_encoder_t.load_state_dict(src_encoder_t.state_dict())
+            tgt_encoder_i.load_state_dict(src_encoder_i.state_dict())
+            tgt_encoder_t, tgt_encoder_i = multi_adapt(args, src_encoder_t, src_encoder_i, tgt_encoder_t, tgt_encoder_i,
+                                                       discriminator,
+                                                       src_classifier, src_data_loader, tgt_data_train_loader,
+                                                       tgt_data_all_loader)
 
         else:
             tgt_encoder.load_state_dict(src_encoder.state_dict())
@@ -332,9 +335,9 @@ def main():
     if args.multimodal:
         print("=== Evaluating classifier for encoded target domain ===")
         print(">>> source only <<<")
-        multi_evaluate(src_encoder, src_classifier, tgt_data_all_loader)
+        multi_evaluate(src_encoder_t, src_encoder_i, src_classifier, tgt_data_all_loader)
         print(">>> domain adaption <<<")
-        multi_evaluate(tgt_encoder, src_classifier, tgt_data_all_loader)
+        multi_evaluate(tgt_encoder_t, tgt_encoder_i, src_classifier, tgt_data_all_loader)
     else:
         print("=== Evaluating classifier for encoded target domain ===")
         print(">>> source only <<<")
