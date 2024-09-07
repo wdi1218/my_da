@@ -1,6 +1,8 @@
 """Adversarial adaptation to train target encoder."""
 
 import torch
+
+from TEST import image, img_outputs
 from utils import make_cuda
 import torch.nn.functional as F
 import torch.nn as nn
@@ -74,6 +76,8 @@ def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
                            lr=param.c_learning_rate)
     CELoss = nn.CrossEntropyLoss()
 
+    text_loss_fn = nn.CrossEntropyLoss()
+    image_loss_fn = nn.CrossEntropyLoss()
     # set train state for Dropout and BN layers
     encoder_t.train()
     encoder_i.train()
@@ -122,8 +126,12 @@ def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
 
             cls_loss = CELoss(preds, labels)
 
+            text_loss = text_loss_fn(text_outputs, labels)
+            image_loss = image_loss_fn(image_outputs, labels)
+            total_loss = cls_loss + 0.5 * (text_loss + image_loss)
+
             # optimize source classifier
-            cls_loss.backward()
+            total_loss.backward()
             optimizer.step()
 
             # print step info
@@ -134,7 +142,7 @@ def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
                          step + 1,
                          len(data_loader),
                          cls_loss.item()))
-
+        torch.cuda.empty_cache()  # 在每个 epoch 后调用
     # save final model
     save_model_encoder(args, encoder_t, encoder_i, param.src_encoder_path_t, param.src_encoder_path_i)
     save_model(args, classifier, param.src_classifier_path)
@@ -257,6 +265,7 @@ def multi_adapt(args, src_encoder_t, src_encoder_i, tgt_encoder_t, tgt_encoder_i
 
     # setup criterion and optimizer
     BCELoss = nn.BCELoss()
+
     # BCELoss = nn.CrossEntropyLoss()
     KLDivLoss = nn.KLDivLoss(reduction='batchmean')
     optimizer_G = optim.Adam(list(tgt_encoder_t.parameters()) + list(tgt_encoder_i.parameters()),
@@ -411,11 +420,6 @@ def multi_adapt(args, src_encoder_t, src_encoder_i, tgt_encoder_t, tgt_encoder_i
             tgt_prob = F.log_softmax(src_classifier(feat_src_tgt) / T, dim=-1)
             kd_loss = KLDivLoss(tgt_prob, src_prob.detach()) * T * T
 
-            # 调整label_src大小，使其与pred_tgt一致
-            # if pred_tgt.size(0) != label_src.size(0):
-            #     label_src = make_cuda(torch.zeros(pred_tgt.size(0), 1).float())
-
-            # compute loss for target encoder
             gen_loss = BCELoss(pred_tgt, label_src)
             loss_tgt = args.alpha * gen_loss + args.beta * kd_loss
             loss_tgt.backward()
@@ -436,7 +440,7 @@ def multi_adapt(args, src_encoder_t, src_encoder_i, tgt_encoder_t, tgt_encoder_i
                          gen_loss.item(),
                          dis_loss.item(),
                          kd_loss.item()))
-
+        torch.cuda.empty_cache()  # 在每个 epoch 后调用
         multi_evaluate(tgt_encoder_t, tgt_encoder_i, src_classifier, tgt_data_all_loader)
 
     return tgt_encoder_t, tgt_encoder_i

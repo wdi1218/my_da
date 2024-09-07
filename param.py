@@ -25,8 +25,8 @@ num_gpu = 1
 manual_seed = None
 
 # params for optimizing models
-c_learning_rate = 5e-5
-d_learning_rate = 1e-5
+c_learning_rate = 3e-3
+d_learning_rate = 5e-2
 
 n_vocab = 30522
 hidden_size = 128
@@ -37,7 +37,7 @@ kernel_sizes = [3, 4, 5]
 pretrain = True
 embed_freeze = True
 class_num = 2
-dropout = 0.1
+dropout = 0.15
 num_labels = 3
 d_hidden_dims = 384
 d_output_dims = 2

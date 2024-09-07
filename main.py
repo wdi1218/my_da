@@ -5,7 +5,8 @@ from train import pretrain, adapt, evaluate, multi_pretrain, multi_evaluate, mul
 from model import (BertEncoder, DistilBertEncoder, DistilRobertaEncoder,
                    BertClassifier, Discriminator, RobertaEncoder, RobertaClassifier, ViTEncoder)
 from utils import convert_examples_to_features, get_data_loader, init_model, init_multi_model, TWI_CSV2Array, \
-    multi_convert_examples_to_features, multi_get_data_loader, roberta_convert_examples_to_features
+    multi_convert_examples_to_features, multi_get_data_loader, roberta_convert_examples_to_features, mvsa_data, \
+    yelp_data
 from sklearn.model_selection import train_test_split
 from transformers import BertTokenizer, RobertaTokenizer
 import torch
@@ -21,18 +22,11 @@ def parse_arguments():
     # argument parsing
     parser = argparse.ArgumentParser(description="Specify Params for Experimental Setting")
 
-    # parser.add_argument('--src', type=str, default="books",
-    #                     choices=["books", "dvd", "electronics", "kitchen", "blog", "airline", "imdb"],
-    #                     help="Specify src dataset")
-    #
-    # parser.add_argument('--tgt', type=str, default="dvd",
-    #                     choices=["books", "dvd", "electronics", "kitchen", "blog", "airline", "imdb"],
-    #                     help="Specify tgt dataset")
-    parser.add_argument('--src', type=str, default="IJCAI2019_data/twitter2015",
+    parser.add_argument('--src', type=str, default="yelp",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify src dataset")
 
-    parser.add_argument('--tgt', type=str, default="IJCAI2019_data/twitter2017",
+    parser.add_argument('--tgt', type=str, default="mvsa",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify tgt dataset")
 
@@ -65,7 +59,7 @@ def parse_arguments():
     parser.add_argument('--beta', type=float, default=1.0,
                         help="Specify KD loss weight")
 
-    parser.add_argument('--temperature', type=int, default=20,
+    parser.add_argument('--temperature', type=int, default=10,
                         help="Specify temperature")
 
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
@@ -74,7 +68,7 @@ def parse_arguments():
     parser.add_argument("--clip_value", type=float, default=0.01,
                         help="lower and upper clip value for disc. weights")
 
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="Specify batch size")
 
     parser.add_argument('--pre_epochs', type=int, default=3,
@@ -127,20 +121,18 @@ def main():
 
     # preprocess data
     print("=== Processing datasets ===")
-    # if args.src in ['blog', 'airline', 'imdb']:
-    #     src_x, src_y = CSV2Array(os.path.join('data', args.src, args.src + '.csv'))
-    # else:
-    #     src_x, src_y = XML2Array(os.path.join('data', args.src, 'negative.review'),
-    #                            os.path.join('data', args.src, 'positive.review'))
     print(args.src)
     if args.src in ["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"]:
         src_label, src_image, src_string = TWI_CSV2Array(os.path.join('datasets', args.src, 'dev.tsv'),
                                                          os.path.join('datasets', args.src, 'test.tsv'),
                                                          os.path.join('datasets', args.src, 'train.tsv')
                                                          )
-    if args.src in ["mvsa"]:
-        src_label, src_image, src_string = [], [], []
+    elif args.src in ["mvsa"]:
+        src_string, src_label, src_image = mvsa_data(os.path.join('datasets', args.src, 'mvsa.txt'), )
         print("0000")
+    elif args.src in ["yelp"]:
+        src_string, src_label, src_image = yelp_data(os.path.join('datasets', args.src, 'combined_output.txt'), )
+        print("111")
 
     src_train_label, src_test_label, src_train_image, src_test_image, src_train_string, src_test_string = train_test_split(
         src_label,
@@ -156,7 +148,7 @@ def main():
                                                          os.path.join('datasets', args.tgt, 'train.tsv')
                                                          )
     else:
-        tgt_label, tgt_image, tgt_string = [], [], []
+        tgt_string, tgt_label, tgt_image = mvsa_data(os.path.join('datasets', args.tgt, 'mvsa.txt'), )
         print("0000")
 
     tgt_train_label, tgt_test_label, tgt_train_image, tgt_test_image, tgt_train_string, tgt_test_string = train_test_split(
@@ -183,13 +175,23 @@ def main():
     else:
 
         if args.multimodal:
-            src_root_path = os.path.join('datasets', args.src + "_images")
+            if args.src in['mvsa']:
+                src_root_path = os.path.join('datasets', args.src)
+            if args.src in ["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"]:
+                src_root_path = os.path.join('datasets', args.src + "_images")
+            if args.src in ["yelp"]:
+                src_root_path = os.path.join('datasets', args.src)
             src_features = multi_convert_examples_to_features(src_string, src_label, src_root_path, src_image)
 
             src_test_features = multi_convert_examples_to_features(src_test_string, src_test_label, src_root_path,
                                                                    src_test_image)
 
-            tgt_root_path = os.path.join('datasets', args.tgt + "_images")
+            if args.tgt in ['mvsa']:
+                tgt_root_path = os.path.join('datasets', args.tgt)
+            if args.tgt in ["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"]:
+                tgt_root_path = os.path.join('datasets', args.tgt + "_images")
+            if args.tgt in ["yelp"]:
+                tgt_root_path = os.path.join('datasets', args.src)
             print(tgt_root_path)
             tgt_features = multi_convert_examples_to_features(tgt_string, tgt_label,
                                                               tgt_root_path, tgt_image)

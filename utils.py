@@ -11,11 +11,12 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, TensorDataset, RandomSampler
 import param
 import re
-from PIL import Image
+from PIL import Image,ImageFile
 from torchvision import models, transforms
 from cross_attention import CrossAttention  # 导入 CrossAttention 类
 import warnings
 
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 warnings.filterwarnings("ignore", message="A parameter name that contains `gamma`")
 warnings.filterwarnings("ignore", message="A parameter name that contains `beta`")
 
@@ -42,11 +43,11 @@ default_transforms = transforms.Compose(_transforms)
 # 标签转换函数
 def convert_label(label):
     if label == 'positive':
-        return 2
+        return 0
     elif label == 'neutral':
         return 1
     elif label == 'negative':
-        return 0
+        return 2
 
 
 class InputFeatures(object):
@@ -99,24 +100,61 @@ def TWI_CSV2Array(path1, path2, path3):
 
 def mvsa_data(path):
     # 初始化列表来存储第二列和第三列的数据
+    ids = []
     texts = []
     labels = []
+
+    image_paths = []  # 新增列表来存储图片路径
     # 打开文件并逐行读取
     with open(path, 'r', encoding='utf-8') as file:
         # 跳过第一行（列名）
-        next(file)
+        # next(file)
         for line in file:
+            # print(line)
             # 去除行尾的换行符和空白
             line = line.strip()
             # 分割每行数据
             parts = line.split('\t')
             # 读取第二列和第三列
+            id = parts[0]
             text = parts[1]
             label = convert_label(parts[2])
+
+            image_path = f"MVSA/data/{id}.jpg"
             # 添加到列表中
             texts.append(text)
             labels.append(label)
-    return texts, labels
+            image_paths.append(image_path)
+    return texts, labels, image_paths
+
+def yelp_data(path):
+    # 初始化列表来存储第二列和第三列的数据
+    ids = []
+    texts = []
+    labels = []
+
+    image_paths = []  # 新增列表来存储图片路径
+    # 打开文件并逐行读取
+    with open(path, 'r', encoding='utf-8') as file:
+        # 跳过第一行（列名）
+        # next(file)
+        for line in file:
+            # print(line)
+            # 去除行尾的换行符和空白
+            line = line.strip()
+            # 分割每行数据
+            parts = line.split('\t')
+            # 读取第二列和第三列
+            id = parts[0]
+            text = parts[1]
+            label = convert_label(parts[2])
+
+            image_path = f"shiyan/images/{id}.jpg"
+            # 添加到列表中
+            texts.append(text)
+            labels.append(label)
+            image_paths.append(image_path)
+    return texts, labels, image_paths
 
 
 def make_cuda(tensor):
@@ -183,7 +221,8 @@ def init_multi_model(args, net_t, net_i, restore_t=None, restore_i=None):
 def save_model_encoder(args, net_t, net_i, name_t, name_i):
     """Save trained model."""
     folder = os.path.join(param.model_root, args.src, args.model, str(args.seed))
-
+    if not os.path.exists(folder):
+        os.makedirs(folder)
     # 保存文本编码器模型
     text_model_path = os.path.join(folder, f"{name_t}_text_model.pth")
     torch.save(net_t.state_dict(), text_model_path)
@@ -266,30 +305,31 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
     # 统一处理所有样本的文本
     all_text_inputs = tokenizer(reviews, padding=True, truncation=True, max_length=max_text_length,
                                 return_tensors='pt').to(device)
-    all_img_inputs = processor(
-        images=[Image.open(os.path.join(root_path, img_path)).convert("RGB").resize(img_size) for img_path in
-                image_paths], return_tensors="pt").to(device)
-
-    for i in range(0, len(reviews), batch_size):
-        processed_count += 1  # 更新计数器
-        if processed_count % 100 == 0:  # 每处理 100 批数据输出提示
-            print(f"已处理 {processed_count * batch_size} 条数据")
+    # 分批处理图像
+    for i in range(0, len(image_paths), batch_size):
+        batch_image_paths = image_paths[i:i + batch_size]
+        batch_images = [Image.open(os.path.join(root_path, img_path)).convert("RGB").resize(img_size) for img_path in
+                        batch_image_paths]
+        batch_img_inputs = processor(images=batch_images, return_tensors="pt").to(device)
 
         batch_texts = all_text_inputs['input_ids'][i:i + batch_size]
         batch_masks = all_text_inputs['attention_mask'][i:i + batch_size]
-        batch_images = all_img_inputs['pixel_values'][i:i + batch_size]
         batch_labels = labels[i:i + batch_size]
 
-        # 将每个样本的特征和标签保存到特征数组中
-        for input_id, image_input, mask, label in zip(batch_texts, batch_images, batch_masks, batch_labels):
+        for input_id, image_input, mask, label in zip(batch_texts, batch_img_inputs['pixel_values'], batch_masks,
+                                                      batch_labels):
             features.append(
                 InputFeatures(
-                    text_feat=input_id.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
-                    img_feat=image_input.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
-                    mask_id=mask.detach().cpu().numpy(),  # 将 tensor 转换为 numpy 数组
+                    text_feat=input_id.detach().cpu().numpy(),
+                    img_feat=image_input.detach().cpu().numpy(),
+                    mask_id=mask.detach().cpu().numpy(),
                     label_id=label
                 )
             )
+
+        processed_count += 1
+        if processed_count % 100 == 0:
+            print(f"已处理 {processed_count * batch_size} 条数据")
 
     return features
 
