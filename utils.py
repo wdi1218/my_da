@@ -340,14 +340,23 @@ def MMD(source, target):
 
 
 def multi_get_data_loader(features, batch_size):
-    all_input_text = torch.tensor([f.text_feat for f in features], dtype=torch.long)
-    all_input_mask = torch.tensor([f.mask_id for f in features], dtype=torch.long)
-    all_input_img = torch.tensor([f.img_feat for f in features], dtype=torch.float)
-    all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+    # 将所有特征数据转换为 numpy.ndarray 后，再转为 PyTorch 张量
+    text_feats = np.array([f.text_feat for f in features], dtype=np.int64)
+    mask_ids = np.array([f.mask_id for f in features], dtype=np.int64)
+    img_feats = np.array([f.img_feat for f in features], dtype=np.float32)
+    label_ids = np.array([f.label_id for f in features], dtype=np.int64)
 
+    # 再将 numpy.ndarray 转为 PyTorch 张量
+    all_input_text = torch.tensor(text_feats, dtype=torch.long)
+    all_input_mask = torch.tensor(mask_ids, dtype=torch.long)
+    all_input_img = torch.tensor(img_feats, dtype=torch.float)
+    all_label_ids = torch.tensor(label_ids, dtype=torch.long)
+
+    # 创建 TensorDataset 和 DataLoader
     dataset = TensorDataset(all_input_text, all_input_mask, all_input_img, all_label_ids)
     sampler = RandomSampler(dataset)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
+
     return dataloader
 
 

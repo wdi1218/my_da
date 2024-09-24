@@ -22,11 +22,11 @@ def parse_arguments():
     # argument parsing
     parser = argparse.ArgumentParser(description="Specify Params for Experimental Setting")
 
-    parser.add_argument('--src', type=str, default="yelp",
+    parser.add_argument('--src', type=str, default="mvsa",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify src dataset")
 
-    parser.add_argument('--tgt', type=str, default="mvsa",
+    parser.add_argument('--tgt', type=str, default="yelp",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify tgt dataset")
 
@@ -71,7 +71,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=8,
                         help="Specify batch size")
 
-    parser.add_argument('--pre_epochs', type=int, default=3,
+    parser.add_argument('--pre_epochs', type=int, default=2,
                         help="Specify the number of epochs for pretrain")
 
     parser.add_argument('--pre_log_step', type=int, default=1,
@@ -95,6 +95,20 @@ def set_seed(seed):
     if torch.cuda.device_count() > 0:
         torch.cuda.manual_seed_all(seed)
 
+def random_sample_data(strings, labels, images, sample_size):
+    # 确保抽样的大小不超过数据总量
+    num_samples = len(strings)
+    sample_size = min(sample_size, num_samples)
+
+    # 生成随机索引
+    sampled_indices = np.random.choice(num_samples, size=sample_size, replace=False)
+
+    # 根据随机索引同步抽样
+    sampled_strings = [strings[i] for i in sampled_indices]
+    sampled_labels = [labels[i] for i in sampled_indices]
+    sampled_images = [images[i] for i in sampled_indices]
+
+    return sampled_strings, sampled_labels, sampled_images
 
 def main():
     args = parse_arguments()
@@ -129,10 +143,13 @@ def main():
                                                          )
     elif args.src in ["mvsa"]:
         src_string, src_label, src_image = mvsa_data(os.path.join('datasets', args.src, 'mvsa.txt'), )
-        print("0000")
+        print("src:mvsa")
     elif args.src in ["yelp"]:
-        src_string, src_label, src_image = yelp_data(os.path.join('datasets', args.src, 'combined_output.txt'), )
-        print("111")
+        src_string, src_label, src_image = yelp_data(os.path.join('datasets', args.src, 'output.txt'), )
+        # 随机抽取1000个样本，保持三者的对应关系
+        src_string, src_label, src_image = random_sample_data(src_string, src_label, src_image,
+                                                              sample_size=30000)
+        print("src:yelp")
 
     src_train_label, src_test_label, src_train_image, src_test_image, src_train_string, src_test_string = train_test_split(
         src_label,
@@ -147,9 +164,15 @@ def main():
                                                          os.path.join('datasets', args.tgt, 'test.tsv'),
                                                          os.path.join('datasets', args.tgt, 'train.tsv')
                                                          )
-    else:
+    elif args.tgt in ["mvsa"]:
         tgt_string, tgt_label, tgt_image = mvsa_data(os.path.join('datasets', args.tgt, 'mvsa.txt'), )
-        print("0000")
+        print("tgt:mvsa")
+    elif args.tgt in ["yelp"]:
+        tgt_string, tgt_label, tgt_image = yelp_data(os.path.join('datasets', args.tgt, 'output.txt'), )
+        # 随机抽取1000个样本，保持三者的对应关系
+        tgt_string, tgt_label, tgt_image = random_sample_data(tgt_string, tgt_label, tgt_image,
+                                                              sample_size=30000)
+        print("tgt:yelp")
 
     tgt_train_label, tgt_test_label, tgt_train_image, tgt_test_image, tgt_train_string, tgt_test_string = train_test_split(
         tgt_label,
@@ -191,7 +214,7 @@ def main():
             if args.tgt in ["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"]:
                 tgt_root_path = os.path.join('datasets', args.tgt + "_images")
             if args.tgt in ["yelp"]:
-                tgt_root_path = os.path.join('datasets', args.src)
+                tgt_root_path = os.path.join('datasets', args.tgt)
             print(tgt_root_path)
             tgt_features = multi_convert_examples_to_features(tgt_string, tgt_label,
                                                               tgt_root_path, tgt_image)

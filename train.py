@@ -264,7 +264,7 @@ def multi_adapt(args, src_encoder_t, src_encoder_i, tgt_encoder_t, tgt_encoder_i
     discriminator.train()
 
     # setup criterion and optimizer
-    BCELoss = nn.BCELoss()
+    BCELoss = nn.BCEWithLogitsLoss()
 
     # BCELoss = nn.CrossEntropyLoss()
     KLDivLoss = nn.KLDivLoss(reduction='batchmean')
