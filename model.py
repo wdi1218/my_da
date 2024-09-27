@@ -73,14 +73,14 @@ class BertClassifier(nn.Module):
     def __init__(self, dropout=0.1):
         super(BertClassifier, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
-        # 改为3分类
-        param.num_labels = 3
-        self.classifier = nn.Linear(param.hidden_size, param.num_labels)
+        self.classifier = nn.Linear(param.hidden_size, 256)  # 增加输出维度
+        self.output_layer = nn.Linear(256, 3)  # 三分类
         self.apply(self.init_bert_weights)
 
     def forward(self, x):
         x = self.dropout(x)
-        out = self.classifier(x)
+        x = self.classifier(x)
+        out = self.output_layer(x)
         return out
 
     def init_bert_weights(self, module):

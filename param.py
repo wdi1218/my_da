@@ -25,7 +25,7 @@ num_gpu = 1
 manual_seed = None
 
 # params for optimizing models
-c_learning_rate = 3e-3
+c_learning_rate = 1e-5
 d_learning_rate = 5e-2
 
 n_vocab = 30522

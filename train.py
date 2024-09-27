@@ -9,11 +9,11 @@ import torch.nn as nn
 import param
 import torch.optim as optim
 from utils import save_model, save_model_encoder
-from modules.attention import CrsAtten
-from transformers import ViTImageProcessor, ViTModel, RobertaTokenizer, RobertaModel, BertTokenizer, BertModel
-from modules.my_resnet import MyResnet_wofc
-from modules.ImgTextMatching import ImgTextMatching
+from sklearn.metrics import recall_score, f1_score
 from cross_attention import CrossAttention  # 导入 CrossAttention 类
+from torch.optim.lr_scheduler import StepLR
+
+
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -68,80 +68,75 @@ def pretrain(args, encoder, classifier, data_loader):
 
     return encoder, classifier
 
-
+# 查看参数，冻结bert vit
 def multi_pretrain(args, encoder_t, encoder_i, classifier, data_loader):
+    # 在训练前解冻参数
+    for params in encoder_t.parameters():
+        params.requires_grad = True
+    for params in encoder_i.parameters():
+        params.requires_grad = True
+
     """Train classifier for source domain."""
     # setup criterion and optimizer
-    optimizer = optim.Adam(list(encoder_t.parameters()) + list(encoder_i.parameters()) + list(classifier.parameters()),
-                           lr=param.c_learning_rate)
+    optimizer = optim.Adam(classifier.parameters(), lr=param.c_learning_rate)
+    scheduler = StepLR(optimizer, step_size=5, gamma=0.5)  # 每5个epoch降低学习率
     CELoss = nn.CrossEntropyLoss()
 
-    text_loss_fn = nn.CrossEntropyLoss()
-    image_loss_fn = nn.CrossEntropyLoss()
     # set train state for Dropout and BN layers
-    encoder_t.train()
-    encoder_i.train()
+    encoder_t.eval()
+    encoder_i.eval()
+
+
     classifier.train()
+
+    # 初始化交叉注意力层
+    cross_attention = CrossAttention(hidden_size=768).to(device)
+
+    # 定义线性层和批归一化层
+    fusion_layer = nn.Linear(768, 128).to(device)  # 调整输出维度
+
+    train_losses = []  # 记录训练损失
 
     for epoch in range(args.pre_epochs):
         for step, (reviews, masks, img_datas, labels) in enumerate(data_loader):
-
+            # 数据预处理
             text_feats = make_cuda(reviews)
             masks = make_cuda(masks)
             img_feats = make_cuda(img_datas)
-
             img_feats = {'pixel_values': img_feats}
             labels = make_cuda(labels)
-            # zero gradients for optimizer
+
             optimizer.zero_grad()
 
             text_outputs = encoder_t(text_feats, masks)
             image_outputs = encoder_i(img_feats)
 
-            # 初始化交叉注意力层
-            cross_attention = CrossAttention(hidden_size=768).to(device)
+            # 交叉注意力融合
+            fused_representation_i2t = cross_attention(query=image_outputs.unsqueeze(1),
+                                                       key=text_outputs.unsqueeze(1),
+                                                       value=text_outputs.unsqueeze(1))
+            fused_representation_t2i = cross_attention(query=text_outputs.unsqueeze(1),
+                                                       key=image_outputs.unsqueeze(1),
+                                                       value=image_outputs.unsqueeze(1))
 
-            # 将文本表示作为 key 和 value，图像表示作为 query 进行交叉注意力融合
-            fused_representation_i2t = cross_attention(query=image_outputs.unsqueeze(1).to(device),
-                                                       key=text_outputs.unsqueeze(1).to(device),
-                                                       value=text_outputs.unsqueeze(1).to(device)).to(device)
-
-            fused_representation_t2i = cross_attention(query=text_outputs.unsqueeze(1).to(device),
-                                                       key=image_outputs.unsqueeze(1).to(device),
-                                                       value=image_outputs.unsqueeze(1).to(device)).to(device)
-
-            # 融合两个交叉注意力的结果
-            # 这里采用相加，拼接或线性层(线性层融合)
-            # 拼接两个表示，得到形状为 [batch_size, 1536]
-            fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1).to(device)
-
-            # 定义一个线性层，将 1536 维的输入映射到 128 维的输出
-            fusion_layer = torch.nn.Linear(1536, 128).to(device)
-
-            # 通过线性层获得融合后的特征
+            # 融合特征
+            alpha = 0.2
+            fused_input = alpha * fused_representation_i2t + (1 - alpha) * fused_representation_t2i
             fused_representation = fusion_layer(fused_input)
             fused_representation = fused_representation.squeeze(1)
 
             preds = classifier(fused_representation)
-
             cls_loss = CELoss(preds, labels)
 
-            text_loss = text_loss_fn(text_outputs, labels)
-            image_loss = image_loss_fn(image_outputs, labels)
-            total_loss = cls_loss + 0.5 * (text_loss + image_loss)
-
-            # optimize source classifier
-            total_loss.backward()
+            cls_loss.backward()
             optimizer.step()
 
-            # print step info
+            train_losses.append(cls_loss.item())
+
             if (step + 1) % args.pre_log_step == 0:
                 print("Epoch [%.2d/%.2d] Step [%.3d/%.3d]: cls_loss=%.4f"
-                      % (epoch + 1,
-                         args.pre_epochs,
-                         step + 1,
-                         len(data_loader),
-                         cls_loss.item()))
+                      % (epoch + 1, args.pre_epochs, step + 1, len(data_loader), cls_loss.item()))
+        scheduler.step()
         torch.cuda.empty_cache()  # 在每个 epoch 后调用
     # save final model
     save_model_encoder(args, encoder_t, encoder_i, param.src_encoder_path_t, param.src_encoder_path_i)
@@ -490,10 +485,16 @@ def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
     # init loss and accuracy
     loss = 0
     acc = 0
+    all_preds = []
+    all_labels = []
 
     # set loss function
     criterion = nn.CrossEntropyLoss()
 
+    # 初始化交叉注意力层
+    cross_attention = CrossAttention(hidden_size=768).to(device)
+    fusion_layer = nn.Linear(768, 128).to(device)  # 调整输出维度
+    bn_layer = nn.BatchNorm1d(128).to(device)  # 添加批归一化层
     # evaluate network
     for (reviews, masks, img_datas, labels) in data_loader:
         labels = make_cuda(labels)
@@ -508,8 +509,7 @@ def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
             text_outputs = encoder_t(text_feats, masks)
             image_outputs = encoder_i(img_feats)
 
-            # 初始化交叉注意力层
-            cross_attention = CrossAttention(hidden_size=768).to(device)
+
 
             # 将文本表示作为 key 和 value，图像表示作为 query 进行交叉注意力融合
             fused_representation_i2t = cross_attention(query=image_outputs.unsqueeze(1).to(device),
@@ -523,14 +523,15 @@ def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
             # 融合两个交叉注意力的结果
             # 这里采用相加，拼接或线性层(线性层融合)
             # 拼接两个表示，得到形状为 [batch_size, 1536]
-            fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1).to(device)
-
-            # 定义一个线性层，将 1536 维的输入映射到 128 维的输出
-            fusion_layer = torch.nn.Linear(1536, 128).to(device)
-
+            # fused_input = torch.cat((fused_representation_i2t, fused_representation_t2i), dim=-1)
+            # 调整权重
+            alpha = 0.2  # 调整权重
+            fused_input = alpha * fused_representation_i2t + (1 - alpha) * fused_representation_t2i
             # 通过线性层获得融合后的特征
             fused_representation = fusion_layer(fused_input)
-            fused_representation = fused_representation.squeeze(1)
+            fused_representation = fused_representation.squeeze(1)  # 去掉第二个维度
+            fused_representation = bn_layer(fused_representation)  # 添加批归一化
+            # fused_representation = fused_representation.squeeze(1)
 
             preds = classifier(fused_representation)
 
@@ -538,9 +539,17 @@ def multi_evaluate(encoder_t, encoder_i, classifier, data_loader):
         pred_cls = preds.data.max(1)[1]
         acc += pred_cls.eq(labels.data).cpu().sum().item()
 
+        # Save predictions and labels for later metrics calculation
+        all_preds.extend(pred_cls.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+
     loss /= len(data_loader)
     acc /= len(data_loader.dataset)
 
-    print("Avg Loss = %.4f, Avg Accuracy = %.4f" % (loss, acc))
+    # Calculate recall and F1 score
+    recall = recall_score(all_labels, all_preds, average='macro')
+    f1 = f1_score(all_labels, all_preds, average='macro')
+
+    print("Avg Loss = %.4f, Avg Accuracy = %.4f, Recall = %.4f, F1 Score = %.4f" % (loss, acc, recall, f1))
 
     return acc

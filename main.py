@@ -14,6 +14,7 @@ import os
 import random
 import argparse
 import numpy as np
+from collections import Counter
 
 path = "datasets/IJCAI2019_data/twitter2015"
 
@@ -22,11 +23,11 @@ def parse_arguments():
     # argument parsing
     parser = argparse.ArgumentParser(description="Specify Params for Experimental Setting")
 
-    parser.add_argument('--src', type=str, default="mvsa",
+    parser.add_argument('--src', type=str, default="yelp",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify src dataset")
 
-    parser.add_argument('--tgt', type=str, default="yelp",
+    parser.add_argument('--tgt', type=str, default="mvsa",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify tgt dataset")
 
@@ -71,7 +72,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=8,
                         help="Specify batch size")
 
-    parser.add_argument('--pre_epochs', type=int, default=2,
+    parser.add_argument('--pre_epochs', type=int, default=5,
                         help="Specify the number of epochs for pretrain")
 
     parser.add_argument('--pre_log_step', type=int, default=1,
