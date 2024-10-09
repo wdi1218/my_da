@@ -11,10 +11,12 @@ class BertEncoder(nn.Module):
     def __init__(self):
         super(BertEncoder, self).__init__()
         self.encoder = BertModel.from_pretrained('./models/bert-base-uncased')
+        self.layer_norm = nn.LayerNorm(768)  # 加入层归一化
 
     def forward(self, texts_inputs, attention_mask):
         text_outputs = self.encoder(input_ids=texts_inputs, attention_mask=attention_mask)
         cls_embedding_t = text_outputs.last_hidden_state[:, 0, :]
+        cls_embedding_t = self.layer_norm(cls_embedding_t)  # 对输出进行归一化
         return cls_embedding_t
 
 
@@ -22,11 +24,13 @@ class ViTEncoder(nn.Module):
     def __init__(self):
         super(ViTEncoder, self).__init__()
         self.model = ViTModel.from_pretrained('models/vit-base-patch16-224')
+        self.layer_norm = nn.LayerNorm(768)  # 加入层归一化
 
     def forward(self, img_inputs):
         img_outputs = self.model(**img_inputs)
         # 提取 [CLS] token 的特征表示
         cls_embedding_i = img_outputs.last_hidden_state[:, 0, :]
+        cls_embedding_i = self.layer_norm(cls_embedding_i)  # 对输出进行归一化
         return cls_embedding_i
 
 

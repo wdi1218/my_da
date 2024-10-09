@@ -29,7 +29,7 @@ c_learning_rate = 1e-5
 d_learning_rate = 5e-2
 
 n_vocab = 30522
-hidden_size = 128
+hidden_size = 768
 intermediate_size = 3072
 embed_dim = 300
 kernel_num = 20

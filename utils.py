@@ -11,7 +11,7 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, TensorDataset, RandomSampler
 import param
 import re
-from PIL import Image,ImageFile
+from PIL import Image, ImageFile
 from torchvision import models, transforms
 from cross_attention import CrossAttention  # 导入 CrossAttention 类
 import warnings
@@ -22,6 +22,7 @@ warnings.filterwarnings("ignore", message="A parameter name that contains `beta`
 
 # 设置环境变量
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # 使用第二张GPU
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -127,6 +128,7 @@ def mvsa_data(path):
             image_paths.append(image_path)
     return texts, labels, image_paths
 
+
 def yelp_data(path):
     # 初始化列表来存储第二列和第三列的数据
     ids = []
@@ -145,9 +147,9 @@ def yelp_data(path):
             # 分割每行数据
             parts = line.split('\t')
             # 读取第二列和第三列
-            id = parts[0]
-            text = parts[1]
-            label = convert_label(parts[2])
+            id = parts[1]
+            text = parts[2]
+            label = convert_label(parts[3])
 
             image_path = f"shiyan/images/{id}.jpg"
             # 添加到列表中
@@ -288,7 +290,8 @@ def image_data(root_path, image_path, processor, img_model):
     return img_output
 
 
-def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
+def multi_convert_examples_to_features(reviews, labels, max_seq_length, tokenizer,
+                                       cls_token='[CLS]', sep_token='[SEP]', pad_token=0, root_path, image_paths):
     features = []
     tokenizer = BertTokenizer.from_pretrained('models/bert-base-uncased')
     processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
@@ -332,6 +335,52 @@ def multi_convert_examples_to_features(reviews, labels, root_path, image_paths):
             print(f"已处理 {processed_count * batch_size} 条数据")
 
     return features
+
+
+# def multi_convert_examples_to_features(reviews, labels,root_path, image_paths):
+#     features = []
+#     tokenizer = BertTokenizer.from_pretrained('models/bert-base-uncased')
+#     processor = ViTImageProcessor.from_pretrained('models/vit-base-patch16-224')
+#
+#     batch_size = 8
+#     max_text_length = 128  # 确保所有文本的最大长度一致
+#     img_size = (224, 224)  # ViT 模型输入的图像尺寸
+#
+#     processed_count = 0  # 初始化计数器
+#
+#     if isinstance(reviews, np.ndarray):
+#         reviews = reviews.tolist()
+#
+#     # 统一处理所有样本的文本
+#     all_text_inputs = tokenizer(reviews, padding=True, truncation=True, max_length=max_text_length,
+#                                 return_tensors='pt').to(device)
+#     # 分批处理图像
+#     for i in range(0, len(image_paths), batch_size):
+#         batch_image_paths = image_paths[i:i + batch_size]
+#         batch_images = [Image.open(os.path.join(root_path, img_path)).convert("RGB").resize(img_size) for img_path in
+#                         batch_image_paths]
+#         batch_img_inputs = processor(images=batch_images, return_tensors="pt").to(device)
+#
+#         batch_texts = all_text_inputs['input_ids'][i:i + batch_size]
+#         batch_masks = all_text_inputs['attention_mask'][i:i + batch_size]
+#         batch_labels = labels[i:i + batch_size]
+#
+#         for input_id, image_input, mask, label in zip(batch_texts, batch_img_inputs['pixel_values'], batch_masks,
+#                                                       batch_labels):
+#             features.append(
+#                 InputFeatures(
+#                     text_feat=input_id.detach().cpu().numpy(),
+#                     img_feat=image_input.detach().cpu().numpy(),
+#                     mask_id=mask.detach().cpu().numpy(),
+#                     label_id=label
+#                 )
+#             )
+#
+#         processed_count += 1
+#         if processed_count % 100 == 0:
+#             print(f"已处理 {processed_count * batch_size} 条数据")
+#
+#     return features
 
 
 def MMD(source, target):

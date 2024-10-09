@@ -23,11 +23,11 @@ def parse_arguments():
     # argument parsing
     parser = argparse.ArgumentParser(description="Specify Params for Experimental Setting")
 
-    parser.add_argument('--src', type=str, default="yelp",
+    parser.add_argument('--src', type=str, default="mvsa",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify src dataset")
 
-    parser.add_argument('--tgt', type=str, default="mvsa",
+    parser.add_argument('--tgt', type=str, default="yelp",
                         choices=["IJCAI2019_data/twitter2015", "IJCAI2019_data/twitter2017"],
                         help="Specify tgt dataset")
 
@@ -72,7 +72,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=8,
                         help="Specify batch size")
 
-    parser.add_argument('--pre_epochs', type=int, default=5,
+    parser.add_argument('--pre_epochs', type=int, default=4,
                         help="Specify the number of epochs for pretrain")
 
     parser.add_argument('--pre_log_step', type=int, default=1,
@@ -143,13 +143,10 @@ def main():
                                                          os.path.join('datasets', args.src, 'train.tsv')
                                                          )
     elif args.src in ["mvsa"]:
-        src_string, src_label, src_image = mvsa_data(os.path.join('datasets', args.src, 'mvsa.txt'), )
+        src_string, src_label, src_image = mvsa_data(os.path.join('datasets', args.src, 'mvsa_1.txt'), )
         print("src:mvsa")
     elif args.src in ["yelp"]:
-        src_string, src_label, src_image = yelp_data(os.path.join('datasets', args.src, 'output.txt'), )
-        # 随机抽取1000个样本，保持三者的对应关系
-        src_string, src_label, src_image = random_sample_data(src_string, src_label, src_image,
-                                                              sample_size=30000)
+        src_string, src_label, src_image = yelp_data(os.path.join('datasets', args.src, 'yelp_1.txt'), )
         print("src:yelp")
 
     src_train_label, src_test_label, src_train_image, src_test_image, src_train_string, src_test_string = train_test_split(
@@ -166,13 +163,10 @@ def main():
                                                          os.path.join('datasets', args.tgt, 'train.tsv')
                                                          )
     elif args.tgt in ["mvsa"]:
-        tgt_string, tgt_label, tgt_image = mvsa_data(os.path.join('datasets', args.tgt, 'mvsa.txt'), )
+        tgt_string, tgt_label, tgt_image = mvsa_data(os.path.join('datasets', args.tgt, 'mvsa_1.txt'), )
         print("tgt:mvsa")
     elif args.tgt in ["yelp"]:
-        tgt_string, tgt_label, tgt_image = yelp_data(os.path.join('datasets', args.tgt, 'output.txt'), )
-        # 随机抽取1000个样本，保持三者的对应关系
-        tgt_string, tgt_label, tgt_image = random_sample_data(tgt_string, tgt_label, tgt_image,
-                                                              sample_size=30000)
+        tgt_string, tgt_label, tgt_image = yelp_data(os.path.join('datasets', args.tgt, 'yelp_1.txt'), )
         print("tgt:yelp")
 
     tgt_train_label, tgt_test_label, tgt_train_image, tgt_test_image, tgt_train_string, tgt_test_string = train_test_split(
